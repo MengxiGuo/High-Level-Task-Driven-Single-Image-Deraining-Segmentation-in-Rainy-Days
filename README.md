@@ -1,4 +1,5 @@
 # High-Level-Task-Driven-Single-Image-Deraining-Segmentation-in-Rainy-Days
+![avatar](https://github.com/MengxiGuo/High-Level-Task-Driven-Single-Image-Deraining-Segmentation-in-Rainy-Days/blob/main/48a4d4f527c019afcdcf7a190274c9a.png)
 
 # Raindrop-Cityscapes Dataset: 
 https://drive.google.com/file/d/1KyBKJ-gWQ1hEstfzKGmtcQs0wfDfqsxi/view?usp=sharing
