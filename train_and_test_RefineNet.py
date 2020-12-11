@@ -20,6 +20,7 @@ import time
 from models import DeepLab
 from derain_model import PreNet_LSTM, Adversary, LaPulas_Fliter, create_disc_nets, Disc_MultiS_Scale_Loss, \
     create_gen_nets, rain_drop_musk_net, create_refine_nets, create_coarse_nets
+from discriminator import Discriminator
 from SSIM import SSIM
 from skimage.measure import compare_psnr, compare_ssim
 
@@ -35,32 +36,31 @@ parser.add_argument("--Test_Real", type=bool, default=False)
 
 parser.add_argument("--Test_multi_weight", type=bool, default=True)
 
-parser.add_argument("--epoch", type=int, default=300)
+parser.add_argument("--epoch", type=int, default=100)
 parser.add_argument("--image_size", type=int, default=512)
 parser.add_argument("--batch_size", type=int, default=12)
-parser.add_argument("--lr", type=float, default=2 * 1e-5)
+parser.add_argument("--lr", type=float, default=1 * 1e-3)
 parser.add_argument('--b1', type=float, default=0.5, help='adam: decay of first order momentum of gradient')
 parser.add_argument('--b2', type=float, default=0.999, help='adam: decay of first order momentum of gradient')
-parser.add_argument("--milestone", type=int, default=[25, 50, 100], help="When to decay learning rate")
+parser.add_argument("--milestone", type=int, default=[30, 50, 80], help="When to decay learning rate")
 
 parser.add_argument("--output_stride", type=int, default=16)
 # parser.add_argument("--momentum", type=float, default=0.9)
 # parser.add_argument("--weight_decay", type=float, default=4 * 1e-5)
 parser.add_argument("--backbone", default="resnet")
 parser.add_argument("--SS_weight_file", default="./weight/DeepLab_resnet101_clean.pkl")
-
-parser.add_argument("--CoarseNet_weight_file", default="./DR_weight/ICSC_LD_Musk/ICSC_LD_Musk_164.pkl")
-parser.add_argument("--DR_weight_file", default="./DR_weight/Coarse_RefineNet2.pkl")
+parser.add_argument("--CoarseNet_weight_file", default="./DR_weight/Coarse_Nets/Coarse_Nets_173.pkl")
+parser.add_argument("--DR_weight_file", default="./DR_weight/Coarse_RefineNet7.pkl")
 parser.add_argument("--Adversary_weight_file", default="./DR_weight/Adverasry_ICSC_LDeep.pkl")
 
-parser.add_argument("--Save_path", default="./DR_result/Coarse_RefineNet2/")
+parser.add_argument("--Save_path", default="./DR_result/Coarse_RefineNet7/")
 parser.add_argument("--Real_Save_path", default="./DR_result/ICSC_LD_LG_Real/")
 
 parser.add_argument("--Drop_musk_weight_file", default="./DR_weight/Rain_drop_musk_5_155.pkl")
 
 parser.add_argument("--recurrent_iter", type=int, default=6, help='number of recursive stages')
 
-parser.add_argument("--GamaG", type=float, default=1, help='weight of lossG')
+parser.add_argument("--GamaG", type=float, default=0.001, help='weight of lossG')
 parser.add_argument("--GamaDeep", type=float, default=0.005, help='weight of loss_G')
 parser.add_argument("--GamaB", type=float, default=0.001, help='weight of loss_B')
 parser.add_argument("--GamaI", type=float, default=0.001, help='weight of loss_I')
@@ -82,6 +82,7 @@ SS_transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225]),
 ])
 
+
 def gen_drop_musk(rainy_image, clean_image, gama):
     map = np.abs(rainy_image - clean_image)
     map = cv2.cvtColor(map, cv2.COLOR_BGR2GRAY)
@@ -89,7 +90,8 @@ def gen_drop_musk(rainy_image, clean_image, gama):
     map[map >= gama] = 1
     return map
 
-def heavy_rainy_name_list(rainy_name_list, clean_name_list, label_name_list,rainy_path, clean_path):
+
+def heavy_rainy_name_list(rainy_name_list, clean_name_list, label_name_list, rainy_path, clean_path):
     new_rainy_name_list = []
     new_clean_name_list = []
     new_label_name_list = []
@@ -99,14 +101,15 @@ def heavy_rainy_name_list(rainy_name_list, clean_name_list, label_name_list,rain
         clean_image = cv2.imread(clean_path + clean_name_list[i].decode())[:, 64:1984, :]
 
         rainy_drop_musk = gen_drop_musk(rainy_image, clean_image, gama=5)
-        
-        #print(np.sum(rainy_drop_musk)/(rainy_drop_musk.shape[0]*rainy_drop_musk.shape[1]))
 
-        if(np.sum(rainy_drop_musk)/(rainy_drop_musk.shape[0]*rainy_drop_musk.shape[1])>=0.3):
+        # print(np.sum(rainy_drop_musk)/(rainy_drop_musk.shape[0]*rainy_drop_musk.shape[1]))
+
+        if (np.sum(rainy_drop_musk) / (rainy_drop_musk.shape[0] * rainy_drop_musk.shape[1]) >= 0.3):
             new_rainy_name_list.append(rainy_name_list[i])
             new_clean_name_list.append(clean_name_list[i])
             new_label_name_list.append(label_name_list[i])
-    return new_rainy_name_list,new_clean_name_list,new_label_name_list
+    return new_rainy_name_list, new_clean_name_list, new_label_name_list
+
 
 def batch_tensor(batch_rainy_name_list, batch_clean_name_list, batch_label_name_list, rainy_path, clean_path,
                  label_path, image_size):
@@ -131,7 +134,7 @@ def batch_tensor(batch_rainy_name_list, batch_clean_name_list, batch_label_name_
 
         rainy_image = np.asarray(derain_transform(Image.fromarray(rainy_image)))
         clean_image = np.asarray(derain_transform(Image.fromarray(clean_image)))
-        #rainy_drop_musk = np.asarray(derain_transform(rainy_drop_musk))
+        # rainy_drop_musk = np.asarray(derain_transform(rainy_drop_musk))
 
         batch_rainy.append(rainy_image)
         batch_clean.append(clean_image)
@@ -180,27 +183,6 @@ def Normalize_to_SS(derain_output_tensor):
 
 
 ############################################################
-def Adversary_loss(logits_real_list, logits_fake_list):
-    criterion_GAN = torch.nn.MSELoss().cuda()
-    true_labels = Variable(torch.Tensor(np.ones(logits_real_list[-1].size())).cuda(), requires_grad=False)
-    loss_real = criterion_GAN(logits_real_list[-1], true_labels)
-    fake_labels = Variable(torch.Tensor(np.zeros(logits_fake_list[-1].size())).cuda(), requires_grad=False)
-    loss_fake = criterion_GAN(logits_fake_list[-1], fake_labels)
-    loss_A = 0.5 * (loss_real + loss_fake)
-    return loss_A
-
-
-def Generator_loss(logits_fake_list, logits_real_list):
-    criterion_GAN = torch.nn.MSELoss().cuda()
-    pred_fake = logits_fake_list[-1]
-    # adv loss
-    true_labels = Variable(torch.Tensor(np.ones(pred_fake.size())).cuda(), requires_grad=False)
-    loss_GAN = criterion_GAN(pred_fake, true_labels)
-    # disc multi scale loss
-    criterion_DiscMultiScaleLoss = Disc_MultiS_Scale_Loss()
-    loss_disc_mutiscale = criterion_DiscMultiScaleLoss(logits_fake_list, logits_real_list)
-    loss_G = loss_GAN + loss_disc_mutiscale
-    return loss_G
 
 
 #############################################################
@@ -241,9 +223,9 @@ def iou_loss(SS_output, SS_output_GT):
         else:
             index_tensor = torch.cat((index_tensor, torch.ones((B, 1, H, W)).cuda() * c), 1)
     index_tensor.type(torch.FloatTensor)
-    SS_output_GT = SS_output_GT*beta
+    SS_output_GT = SS_output_GT * beta
     SS_output_GT = F.softmax(SS_output_GT, dim=1)
-    SS_output_GT =  torch.sum(SS_output_GT*index_tensor,1)
+    SS_output_GT = torch.sum(SS_output_GT * index_tensor, 1)
     SS_output_GT = SS_output_GT.trunc().type(torch.LongTensor).cuda()
     ce_loss = nn.CrossEntropyLoss().cuda()
     return ce_loss(SS_output, SS_output_GT)
@@ -253,34 +235,34 @@ def Boundary_loss(SS_output, SS_output_GT):
     B, C, H, W = SS_output.shape
     Lapulas = LaPulas_Fliter().cuda()
     beta = 1000
-    #SS_output_map = Variable(torch.zeros((B,1,H,W)).cuda(), requires_grad=True)
-    #SS_output_GT_map = Variable(torch.zeros((B,1,H,W)).cuda(), requires_grad=False)
+    # SS_output_map = Variable(torch.zeros((B,1,H,W)).cuda(), requires_grad=True)
+    # SS_output_GT_map = Variable(torch.zeros((B,1,H,W)).cuda(), requires_grad=False)
     for c in range(C):
         if (c == 0):
-            index_tensor = torch.ones((B, 1, H, W)).cuda() * (c+1)
+            index_tensor = torch.ones((B, 1, H, W)).cuda() * (c + 1)
         else:
-            index_tensor = torch.cat((index_tensor, torch.ones((B, 1, H, W)).cuda() * (c+1)), 1)
+            index_tensor = torch.cat((index_tensor, torch.ones((B, 1, H, W)).cuda() * (c + 1)), 1)
     index_tensor.type(torch.FloatTensor)
-    SS_output = SS_output*beta
-    SS_output_GT = SS_output_GT*beta
+    SS_output = SS_output * beta
+    SS_output_GT = SS_output_GT * beta
     SS_output = F.softmax(SS_output, dim=1)
     SS_output_GT = F.softmax(SS_output_GT, dim=1)
-    SS_output = torch.sum(SS_output*index_tensor,1).unsqueeze(1)
-    SS_output_GT =  torch.sum(SS_output_GT*index_tensor,1).unsqueeze(1)
+    SS_output = torch.sum(SS_output * index_tensor, 1).unsqueeze(1)
+    SS_output_GT = torch.sum(SS_output_GT * index_tensor, 1).unsqueeze(1)
     SS_output = Lapulas(SS_output)
     SS_output_GT = Lapulas(SS_output_GT)
-    #gt_map = SS_output_GT[0, 0]
-    #print(gt_map.shape)
-    #print(torch.max(gt_map), torch.min(gt_map))
-    
+    # gt_map = SS_output_GT[0, 0]
+    # print(gt_map.shape)
+    # print(torch.max(gt_map), torch.min(gt_map))
+
     # print("##################################")
-    #mse_loss = nn.MSELoss().cuda()
-    #bce_loss = nn.BCELoss().cuda()
+    # mse_loss = nn.MSELoss().cuda()
+    # bce_loss = nn.BCELoss().cuda()
     l1_loss = nn.L1Loss().cuda()
-    
-    #cv2.imwrite("./boundary.png", gt_map.cpu().numpy() * 255)
-    loss = l1_loss(SS_output/torch.max(SS_output), SS_output_GT/torch.max(SS_output_GT))
-    
+
+    # cv2.imwrite("./boundary.png", gt_map.cpu().numpy() * 255)
+    loss = l1_loss(SS_output / torch.max(SS_output), SS_output_GT / torch.max(SS_output_GT))
+
     return loss
 
 
@@ -293,14 +275,16 @@ def Deeplab_loss(low_level_feat, aspp_feat_list, low_level_feat_gt, aspp_feat_li
     loss += 1 / 10 * criterion(low_level_feat, low_level_feat_gt.detach())
     return loss
 
+
 def gram_matrix(input):
     a, b, c, d = input.size()
 
-    features = input.view(a * b, c * d) 
+    features = input.view(a * b, c * d)
 
-    G = torch.mm(features, features.t()) 
+    G = torch.mm(features, features.t())
 
     return G.div(a * b * c * d)
+
 
 def Style_loss(low_level_feat, aspp_feat_list, low_level_feat_gt, aspp_feat_list_gt):
     criterion = nn.L1Loss()
@@ -311,6 +295,7 @@ def Style_loss(low_level_feat, aspp_feat_list, low_level_feat_gt, aspp_feat_list
     loss += 1 / 10 * criterion(gram_matrix(low_level_feat), gram_matrix(low_level_feat_gt.detach()))
     return loss
 
+
 ##########################################################
 def derain_loss(derain_output_tensor, clean_tensor):
     criterion = SSIM().cuda()
@@ -320,14 +305,47 @@ def derain_loss(derain_output_tensor, clean_tensor):
     return loss
 
 
-def derain_loss_2(derain_output_tensor, clean_tensor, musk):
-    criterion = SSIM().cuda()
-    criterion1 = nn.L1Loss().cuda()
-    loss = 1.5 * derain_loss(derain_output_tensor*musk, clean_tensor*musk) + derain_loss(derain_output_tensor*(1-musk), clean_tensor*(1-musk))
+def derain_loss_2(Refine_output_list, Train_clean_tensor):
+    cirterion = nn.MSELoss().cuda()
+    loss = derain_loss(Refine_output_list[-1], Train_clean_tensor)
+    for i in range(len(Refine_output_list) - 1):
+        loss = loss + 0.5 * cirterion(Refine_output_list[i], gt_residual)
     return loss
 
 
 ##########################################################
+def Discriminator_Loss(logits_real, logits_fake):
+    N = logits_real.size()
+    true_labels = torch.Tensor(torch.zeros(N)).cuda()
+    Bce_loss = nn.BCEWithLogitsLoss().cuda()
+    Ico_loss = Bce_loss(logits_real, true_labels)
+    Ien_loss = Bce_loss(logits_fake, 1 - true_labels)
+    loss = Ico_loss + Ien_loss
+    return loss
+
+
+def Generator_loss(logits_fake):
+    N = logits_fake.size()
+    true_labels = torch.Tensor(torch.zeros(N)).cuda()
+    Bce_loss = nn.BCEWithLogitsLoss().cuda()
+    loss = Bce_loss(logits_fake, true_labels)
+    return loss
+
+
+'''
+def Discriminator_Loss(logist_real, logist_fake):
+    criterionGAN = GANLoss(real_label=1.0, fake_label=0.0)
+    loss_fake = criterionGAN(logist_fake, is_real=False)
+    loss_real = criterionGAN(logist_real,is_real=True)
+    return loss_fake + loss_real
+
+def Generator_loss(logist_fake):
+    criterionGAN = GANLoss(real_label=1.0, fake_label=0.0)
+    loss_fake = criterionGAN(logist_fake, is_real=False)
+    return -1*loss_fake
+'''
+
+
 ##########################################################
 ##########################################################
 ##########################################################
@@ -339,49 +357,79 @@ def train(args, Coarse_Net_model, Refine_Net_model, Rain_drop_model, SS_model):
     rainy_name_list = Train_rain_image_name
     clean_name_list = Train_clean_image_name
     label_name_list = Train_label_image_name
-    
+
     print(len(rainy_name_list))
-    
-    rainy_name_list, clean_name_list, label_name_list = heavy_rainy_name_list(rainy_name_list, clean_name_list, label_name_list,args.rain_data_path,args.clean_data_path)
-    
+
+    '''
+    rainy_name_list, clean_name_list, label_name_list = heavy_rainy_name_list(rainy_name_list, clean_name_list,
+                                                                              label_name_list, args.rain_data_path,
+                                                                              args.clean_data_path)
+    '''
     print(len(rainy_name_list))
-    
-    Refine_Net_model.load_state_dict(torch.load("./DR_weight/Coarse_RefineNet2/Coarse_RefineNet2_198.pkl"))
 
     optimizer_D = torch.optim.Adam(Refine_Net_model.parameters(), lr=args.lr, betas=(args.b1, args.b2))
+    #optimizer_Dis = torch.optim.Adam(discriminator.parameters(), lr=args.lr / 10, betas=(args.b1, args.b2))
 
-    # scheduler1 = MultiStepLR(optimizer_D, milestones=args.milestone, gamma=0.2)
-    # scheduler2 = MultiStepLR(optimizer_A, milestones=args.milestone, gamma=0.2)
+    scheduler1 = MultiStepLR(optimizer_D, milestones=args.milestone, gamma=0.2)
+    #scheduler2 = MultiStepLR(optimizer_Dis, milestones=args.milestone, gamma=0.2)
 
     counter = 0
 
     start_time = time.time()
 
-    for ep in range(199, args.epoch):
-        # scheduler1.step(ep)
-        # scheduler2.step(ep)
+    for ep in range(args.epoch):
+        scheduler1.step(ep)
+        #scheduler2.step(ep)
+        if (ep >= 200):
+            rainy_name_list, clean_name_list, label_name_list = heavy_rainy_name_list(rainy_name_list, clean_name_list,
+                                                                                      label_name_list,
+                                                                                      args.rain_data_path,
+                                                                                      args.clean_data_path)
         batch_idxs = len(rainy_name_list) // args.batch_size
         for idx in range(0, batch_idxs):
             # batching......
             batch_rainy_name_list = rainy_name_list[idx * args.batch_size: (idx + 1) * args.batch_size]
             batch_clean_name_list = clean_name_list[idx * args.batch_size: (idx + 1) * args.batch_size]
             batch_label_name_list = label_name_list[idx * args.batch_size: (idx + 1) * args.batch_size]
-            Train_rainy_tensor, Train_clean_tensor, Train_label,Train_rain_drop_musk= batch_tensor(batch_rainy_name_list,
-                                                                               batch_clean_name_list,
-                                                                               batch_label_name_list,
-                                                                               args.rain_data_path,
-                                                                               args.clean_data_path, args.label_path,
-                                                                               args.image_size)
+            Train_rainy_tensor, Train_clean_tensor, Train_label, Train_rain_drop_musk = batch_tensor(
+                batch_rainy_name_list,
+                batch_clean_name_list,
+                batch_label_name_list,
+                args.rain_data_path,
+                args.clean_data_path, args.label_path,
+                args.image_size)
 
             counter += 1
 
             optimizer_D.zero_grad()
+            #optimizer_Dis.zero_grad()
             out_musk = Rain_drop_model(Train_rainy_tensor)
             Train_input = torch.cat((Train_rainy_tensor, out_musk), dim=1)
-            # Train_input = Train_rainy_tensor
-            output = Coarse_Net_model(Train_input)
-            Train_input = torch.cat((output, out_musk), dim=1)
-            derain_output = Refine_Net_model(Train_input)
+            coarse_output = Coarse_Net_model(Train_input)
+            coarse_output = torch.clamp(coarse_output, 0, 1)
+
+            gt_residual = Train_clean_tensor - coarse_output
+
+
+            '''
+            Refine_residual = Refine_Net_model(coarse_output)[-1]
+            derain_output = Refine_residual + coarse_output            
+            logist_fake = discriminator(derain_output)
+            logist_real = discriminator(Train_clean_tensor)
+            Loss_Dis = Discriminator_Loss(logist_real, logist_fake)
+            Loss_Dis.backward()
+            optimizer_Dis.step()
+            '''
+            Refine_residual_list = Refine_Net_model(coarse_output)
+            Refine_output_list = []
+            for i in range(len(Refine_residual_list)):
+                if(i==0):
+                    Refine_output_list.append(Refine_residual_list[i] + coarse_output)
+                else:
+                    temp = Refine_output_list[-1] + Refine_residual_list[i]
+                    Refine_output_list.append(temp)
+            derain_output = Refine_residual_list[-1] + coarse_output
+            #logist_fake = discriminator(derain_output)
 
             SS_output, low_level_feat, aspp_feat_list = SS_model(Normalize_to_SS(derain_output))
             mean = torch.Tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).cuda()
@@ -389,19 +437,19 @@ def train(args, Coarse_Net_model, Refine_Net_model, Rain_drop_model, SS_model):
             Nomrmalized_Train_clean_tensor = (Train_clean_tensor - mean) / std
             SS_output_GT, low_level_feat_gt, aspp_feat_list_gt = SS_model(Nomrmalized_Train_clean_tensor)
 
-
             Loss_Deep = Deeplab_loss(low_level_feat, aspp_feat_list, low_level_feat_gt, aspp_feat_list_gt)
-            
-            Loss_S = Style_loss(low_level_feat, aspp_feat_list, low_level_feat_gt, aspp_feat_list_gt)
 
-            Loss_D = derain_loss_2(derain_output, Train_clean_tensor,Train_rain_drop_musk)
+            # Loss_S = Style_loss(low_level_feat, aspp_feat_list, low_level_feat_gt, aspp_feat_list_gt)
 
-            Loss_B = Boundary_loss(SS_output, SS_output_GT)
+            Loss_D = derain_loss_2(Refine_output_list, Train_clean_tensor)
 
-            #Loss_I = iou_loss(SS_output, SS_output_GT)
-            
-            # Loss_G = Generator_loss(logits_fake_list, logits_real_list)
-            loss = Loss_D  + args.GamaB * Loss_B + args.GamaDeep * Loss_Deep +  args.GamaS * Loss_S #  + args.GamaG * Loss_G  + args.GamaDeep * Loss_Deep
+            # Loss_B = Boundary_loss(SS_output, SS_output_GT)
+
+            #Loss_G = Generator_loss(logist_fake)
+
+            # Loss_I = iou_loss(SS_output, SS_output_GT)
+
+            loss = Loss_D + args.GamaDeep * Loss_Deep#+ args.GamaG * Loss_G + args.GamaS * Loss_S  + args.GamaB * Loss_B  # + args.GamaDeep * Loss_Deep
             loss.backward()
             optimizer_D.step()
 
@@ -424,13 +472,13 @@ def train(args, Coarse_Net_model, Refine_Net_model, Rain_drop_model, SS_model):
                       % ((ep + 1), counter, time.time() - start_time, loss, loss2))
                 print("Loos_D: ", Loss_D)
                 print("Loss_Deep: ", Loss_Deep)
-                print("Loos_B: ", Loss_B)
-                print("Loos_S: ", Loss_S)
-                #print("Loos_I: ", Loss_I)
-                # print("Loos_G:", Loss_G)
+                # print("Loos_B: ", Loss_B)
+                # print("Loos_S: ", Loss_S)
+                # print("Loos_I: ", Loss_I)
+                #print("Loos_G:", Loss_G)
             if counter % 50 == 0:
                 torch.save(Refine_Net_model.state_dict(), args.DR_weight_file)
-        torch.save(Refine_Net_model.state_dict(), "./DR_weight/Coarse_RefineNet2/Coarse_RefineNet2_" + str(ep) + ".pkl")
+        torch.save(Refine_Net_model.state_dict(), "./DR_weight/Coarse_RefineNet7/Coarse_RefineNet7_" + str(ep) + ".pkl")
 
 
 ############################################################################################
@@ -472,40 +520,51 @@ def merge_tensor_to_image(output_list):
     return merge_img_list
 
 
-def test(args, derain_model):
-    # Test_clean_image_name = read_data(args.Data_path + "Test_Clean_image_name.h5")
-    Test_rain_image_name = read_data(args.Data_path + "Test_Rainy_image_name.h5")
-    # Test_label_image_name = read_data(args.Data_path + "Test_Label_image_name.h5")
+def test_derain(Coarse_Net_model, Refine_Net_model, Rain_drop_model, SS_model):
 
-    # input_name_list = Test_clean_image_name
-    input_name_list = Test_rain_image_name
-    # label_name_list = Test_label_image_name
+    Test_derain_image_path = "./Demovideo/Dataset/"
 
-    # input_path = args.clean_data_path
-    input_path = args.rain_data_path
-    # label_path = args.label_path
+    input_name_list = os.listdir(Test_derain_image_path)
 
-    derain_model.load_state_dict(torch.load(args.DR_weight_file))
-    derain_model.eval()
+    weight_name = "./DR_weight/Coarse_RefineNet6/Coarse_RefineNet6_90.pkl"
+    Refine_Net_model.load_state_dict(torch.load(weight_name))
+    Refine_Net_model.eval()
 
     for index in range(len(input_name_list)):
-        input_image = cv2.imread(input_path + input_name_list[index].decode())[:, 64:1984, :]
+        print(index)
+        input_image = cv2.imread(Test_derain_image_path + input_name_list[index])[:, 64:1984, :]
         input_tensor_list = cut_batch_tensor(input_image, 2)
         output_list = []
         for l in range(len(input_tensor_list)):
-            output_tensor_list = derain_model(input_tensor_list[l])
-            output_tensor_list = [output_tensor_list]
+            input_tensor = input_tensor_list[l]
+            output_musk = Rain_drop_model(input_tensor)
+            derain_input = torch.cat((input_tensor, output_musk), 1)
+            coarse_output = Coarse_Net_model(derain_input)
+            coarse_output = torch.clamp(coarse_output, 0, 1)
+            refine_residual = Refine_Net_model(coarse_output)[-1]
+            output_tensor = refine_residual + coarse_output
+            # output_tensor = coarse_output
+            output_tensor_list = [output_tensor]
             output_tensor_list = output_list_to_cpu(output_tensor_list)
             output_list.append(output_tensor_list)
         output_image_list = merge_tensor_to_image(output_list)
+        derain_image = output_image_list[0]
 
-        for i in range(len(output_image_list)):
-            save_path = args.Save_path + "DR_predict/" + str(i + 1) + "/"
-            if not os.path.exists(save_path):
-                os.mkdir(save_path)
-            cv2.imwrite(save_path + str(index) + "_DR.png", output_image_list[i])
-        cv2.imwrite(args.Save_path + "input/" + str(index) + "_input.png", input_image)
-        # print("DR_", str(index))
+        H, W, C = derain_image.shape
+        input_tensor = SS_cut_batch_tensor(derain_image)
+        SS_output, low_level_feat, aspp_feat = SS_model(input_tensor)
+        output_image = SS_merge_tensor_to_image(SS_output)
+        # print(output_image.shape)
+        predict = np.zeros([H, W])
+        for i in range(H):
+            for j in range(W):
+                predict_class = np.argmax(output_image[:, i, j])
+                predict[i, j] = predict_class
+        cv2.imwrite("./buffer1.png", derain_image)
+        derain_image = cv2.imread("./buffer1.png")
+
+        cv2.imwrite("./Demovideo/Derain/derain/" + input_name_list[index].split(".")[0] + "_derain.png", derain_image)
+        cv2.imwrite("./Demovideo/Derain/SS/" + input_name_list[index].split(".")[0] + "_SS.png", predict)
         torch.cuda.empty_cache()
 
 
@@ -581,7 +640,6 @@ def SS_merge_tensor_to_image(output_tensor):
             merge_img = np.concatenate((merge_img, img), 2)
     return merge_img
 
-
 def test_multi_weight(args, Coarse_Net_model, Refine_Net_model, Rain_drop_model, SS_model):
     Test_clean_image_name = read_data(args.Data_path + "Test_Clean_image_name.h5")
     Test_rain_image_name = read_data(args.Data_path + "Test_Rainy_image_name.h5")
@@ -595,11 +653,18 @@ def test_multi_weight(args, Coarse_Net_model, Refine_Net_model, Rain_drop_model,
     rainy_input_path = args.rain_data_path
     label_path = args.label_path
 
-    weight_path = "./DR_weight/Coarse_RefineNet2/"
+    weight_path = "./DR_weight/Coarse_RefineNet7/"
     weight_name_list = os.listdir(weight_path)
-    for k in range(170, len(weight_name_list)):
+
+    number_list = [i for i in range(97, 98)] + [i for i in range(98, 100)]
+    # for k in range(len(weight_name_list)):
+    for k in number_list:
         print("epoch :", k)
-        weight_name = weight_path + "Coarse_RefineNet2_" + str(k) + ".pkl"
+        if not os.path.exists(args.Save_path + "Multi_weight/" + str(k) + "derain/"):
+            os.mkdir(args.Save_path + "Multi_weight/" + str(k) + "derain/")
+            os.mkdir(args.Save_path + "Multi_weight/" + str(k) + "SS/")
+        #weight_name = weight_path + "Coarse_RefineNet7_" + str(k) + ".pkl"
+        weight_name = "./DR_weight/Coarse_RefineNet6/Coarse_RefineNet6_90.pkl"
         Refine_Net_model.load_state_dict(torch.load(weight_name))
         Refine_Net_model.eval()
         argv_psnr = 0
@@ -618,9 +683,11 @@ def test_multi_weight(args, Coarse_Net_model, Refine_Net_model, Rain_drop_model,
                 input_tensor = input_tensor_list[l]
                 output_musk = Rain_drop_model(input_tensor)
                 derain_input = torch.cat((input_tensor, output_musk), 1)
-                output_tensor = Coarse_Net_model(derain_input)
-                derain_input = torch.cat((output_tensor, output_musk), 1)
-                output_tensor = Refine_Net_model(derain_input)
+                coarse_output = Coarse_Net_model(derain_input)
+                coarse_output = torch.clamp(coarse_output, 0, 1)
+                refine_residual = Refine_Net_model(coarse_output)[-1]
+                output_tensor = refine_residual + coarse_output
+                # output_tensor = coarse_output
                 output_tensor_list = [output_tensor]
                 output_tensor_list = output_list_to_cpu(output_tensor_list)
                 output_list.append(output_tensor_list)
@@ -657,10 +724,15 @@ def test_multi_weight(args, Coarse_Net_model, Refine_Net_model, Rain_drop_model,
             argv_psnr += psnr
             argv_ssim += ssim
 
-            if (index == 7):
-                cv2.imwrite(args.Save_path + "Multi_weight/epoch_" + str(k) + ".png", derain_image)
+            # if (index == 7):
+            # cv2.imwrite(args.Save_path + "Multi_weight/epoch_" + str(k) + ".png", derain_image)
+            #cv2.imwrite(args.Save_path + "Multi_weight/derain/" + str(index) + "_derain.png", derain_image)
+            #cv2.imwrite(args.Save_path + "Multi_weight/SS/" + str(index) + "_SS.png", predict)
+            cv2.imwrite("./DR_result/Coarse_RefineNet6/derain/" + str(index) + "_derain.png", derain_image)
+            cv2.imwrite("./DR_result/Coarse_RefineNet6/SS/"+ str(index) + "_SS.png", predict)
 
             torch.cuda.empty_cache()
+
         miou = 0
         non_class = 0
         for Class in range(19):
@@ -671,21 +743,26 @@ def test_multi_weight(args, Coarse_Net_model, Refine_Net_model, Rain_drop_model,
                 miou += TP[Class] / (FN[Class] + FP[Class] - TP[Class])
         miou = miou / (19 - non_class)
         print("mIou :", miou)
+
         print("argv_psnr:", argv_psnr / len(rainy_input_name_list))
         print("argv_ssim:", argv_ssim / len(rainy_input_name_list))
+        
 
 
 args = parser.parse_args()
+
+#discriminator = Discriminator().cuda()
+#discriminator = nn.DataParallel(discriminator)
 
 Coarse_Net_model = create_coarse_nets()
 Coarse_Net_model = nn.DataParallel(Coarse_Net_model)
 Coarse_Net_model.load_state_dict(torch.load(args.CoarseNet_weight_file))
 Coarse_Net_model.eval()
 
-Refine_Net_model = create_gen_nets()
+Refine_Net_model = create_refine_nets()
 Refine_Net_model = nn.DataParallel(Refine_Net_model)
 
-Rain_drop_musk_net = rain_drop_musk_net(n_blocks=5).cuda()
+Rain_drop_musk_net = rain_drop_musk_net(n_blocks=5, requires_grad=False).cuda()
 Rain_drop_model = nn.DataParallel(Rain_drop_musk_net)
 Rain_drop_model.load_state_dict(torch.load(args.Drop_musk_weight_file))
 Rain_drop_model.eval()
@@ -697,11 +774,14 @@ SS_model.eval()
 
 if (args.is_Train):
     train(args, Coarse_Net_model, Refine_Net_model, Rain_drop_model, SS_model)
+    test_multi_weight(args, Coarse_Net_model, Refine_Net_model, Rain_drop_model, SS_model)
 else:
     if (args.Test_Real):
         test_real(args, derain_model)
     else:
         if (args.Test_multi_weight):
-            test_multi_weight(args, Coarse_Net_model, Refine_Net_model, Rain_drop_model, SS_model)
+            #test_multi_weight(args, Coarse_Net_model, Refine_Net_model, Rain_drop_model, SS_model)
+            #test_multi_weight_robotcar(args, Coarse_Net_model, Refine_Net_model, Rain_drop_model, SS_model)
+            test_derain(Coarse_Net_model, Refine_Net_model, Rain_drop_model, SS_model)
         else:
             test(args, derain_model)
