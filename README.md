@@ -20,9 +20,6 @@ conclusion is consistent with that of previous studies. (2) cascading the high-l
 
 ![avatar](https://github.com/MengxiGuo/High-Level-Task-Driven-Single-Image-Deraining-Segmentation-in-Rainy-Days/blob/main/4b9e2cd1b85318f79cf0608a660a665.png)
 
-# Raindrop-Cityscapes Dataset: 
-https://drive.google.com/file/d/1KyBKJ-gWQ1hEstfzKGmtcQs0wfDfqsxi/view?usp=sharing
-
 # Demo Vedio
 http://www.bilibili.com/video/BV1da411F7fN?share_medium=android&share_source=copy_link&bbid=21F89BD0-1545-41A1-A7D9-9D3FED097E2A30816infoc&ts=1607689316096
 
